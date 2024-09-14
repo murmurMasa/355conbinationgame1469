@@ -1,0 +1,182 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta http-equiv="Content-Security-Policy" content="default-src * data: gap: content: https://ssl.gstatic.com; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'">
+    <script src="components/loader.js"></script>
+    <link rel="stylesheet" href="components/loader.css">
+    <link rel="stylesheet" href="css/style.css">
+<title>図形合体ゲーム</title>
+<script src="matter.min.js">
+</script>
+<script>
+let canvas, context, engine;        //キャンバス、物理エンジン
+let current, next;                  //現在の図形、次の図形
+let lineX, cnt;                     //落下位置、判定用カウンタ
+let score = 0, status = "ready";    //スコア、ステータス（ready/play/end)
+
+const init = () => {
+    //キャンバスの取得
+    canvas = document.getElementById("world");              //キャンバスを取得
+    context = canvas.getContext("2d");
+    //物理エンジン、レンダラーの作成
+    engine = Matter.Engine.create();                        //物理エンジン（物理ワールド）を作成
+    const render = Matter.Render.create({                   //レンダラーを作成
+        canvas: canvas,
+        engine: engine,
+        options: {                                          //レンダラーのオプション　サイズ：キャンバスに合わせる　ピクセル比：1対1　ワイヤーフレーム：表示しない　背景色：白
+            width: canvas.width,
+            height: canvas.height,
+            pixelRatio: 1,
+            wireframes: false,
+            background: "#FFFFFF"
+        }
+    });
+    //箱を配置
+    const options = {                               //箱(壁)のオプション　ラベル：ー　静的オブジェクト　塗りつぶし色：緑色
+        label: "-",
+        isStatic: true,
+        render: {fillStyle: "#339933"}
+    };
+    const left = Matter.Bodies.rectangle(200, 380, 10, 460, options);       //左右、下の壁は長方形
+    const right = Matter.Bodies.rectangle(600, 380, 10, 460, options);
+    const bottom = Matter.Bodies.rectangle(400, 595, 400, 10, options);
+    Matter.Composite.add(engine.world, [left, right, bottom]);              //物理ワールドに追加
+    //マウス、衝突、更新イベントの登録
+    canvas.addEventListener("mousedown", event => {                         //マウスボタンを押したとき
+        if (status == "play") {
+            //図形を落下
+            Matter.Body.setStatic(current, false);                          //図形を動的オブジェクトにする
+            Matter.Body.setMass(current, 5);                                //図形の重さを５に
+        } else {
+            startGame();
+        }
+    });
+    canvas.addEventListener("mousemove", moveShape);
+    Matter.Events.on(engine, "collisionStart", collide);                    //図形同士が衝突したらcollide()関数を実行
+    Matter.Events.on(render, "afterRender", update);                        //レンダリングごとにupdate()関数を実行
+    //実行
+    Matter.Runner.run(engine);                                              //物理ワールド、レンダラーを実行
+    Matter.Render.run(render);
+}
+
+const createShape = (x, y, n, static = false) => {
+    //図形の作成
+    let shape;
+    const options = {
+        label: `shape_${n}`,
+        isStatic: static,
+        render: {fillStyle: `hsl(${(n-3)*36}, 70%, 50%)`}                   //角数によって色相を変える
+    };
+    if (n > 11) {                                                           //角数が11より大きいなら
+        //円
+        shape = Matter.Bodies.circle(x, y, n*8, options);                   //円を作成する
+    } else {                                                                //角数が11以下なら
+        //正ｎ角形
+        shape = Matter.Bodies.polygon(x, y, n, n*8, options);                  //正ｎ角形を作成
+    }
+    Matter.Composite.add(engine.world, shape);
+    return shape;
+}
+
+const startGame = () => {
+    //図形の削除
+    for (const body of Matter.Composite.allBodies(engine.world)) {          //作成済みの図形を削除
+        if (body.label.indexOf("shape") > -1) {
+            Matter.Composite.remove(engine.world, body);
+        }
+    }
+    //ゲーム開始
+    [lineX, cnt, score, status] = [canvas.width/2, 0, 0, "play"];           //落下点はキャンバスの左右中央
+    let n = Math.floor(Math.random() * 4) + 3;                              //３～６角形をランダムで作成
+    current = createShape(lineX, 50, n, true);
+    n = Math.floor(Math.random() * 4) + 3;
+    next = createShape(700, 300, n, true);                                  //NEXTに表示される図形を作成
+}
+
+const moveShape = event => {
+    //図形（落下位置）を移動
+    lineX = Math.max(220, Math.min(580, event.offsetX));                    //落下点の座標をマウスカーソルの位置に合わせる
+    if ((status == "play") && (current.isStatic)) {                           //図形が静的オブジェクトなら落下点の位置に移動
+        Matter.Body.setPosition(current, {x: lineX, y: 50});
+    }
+}
+
+const collide = event => {
+    //図形の衝突
+    for (const pair of event.pairs) {                                       //衝突した（２つの）図形を取り出す
+        if ((pair.bodyA.label == pair.bodyB.label)&&                        //角数が同じでどちらも静的オブジェクトなら
+           (!pair.bodyA.isStatic)&&(!pair.bodyB.isStatic)) {
+            const n = Number(pair.bodyA.label.split("_")[1]) + 1;           //その角数＋１
+            const [x1, y1] = [pair.bodyA.position.x, pair.bodyA.position.y]; //衝突した図形の座標を取得し、その図形を削除
+            const [x2, y2] = [pair.bodyB.position.x, pair.bodyB.position.y];
+            [pair.bodyA.label, pair.bodyB.label] = ["remove", "remove"];
+            Matter.Composite.remove(engine.world, pair.bodyA);
+            Matter.Composite.remove(engine.world, pair.bodyB);
+            const shape = createShape((x1+x2)/2, (y1+y2)/2, n);             //衝突した図形同士の中間位置にｎ角形を作成
+            score += n;
+        }
+    }
+}
+
+const update = () => {
+    if (status == "play") {
+        //判定
+        let color = "#00FF00";                                              //箱の上端のガイド線の色　黄緑
+        if ((current.position.y > 150) || (current.label == "remove")) {    //ガイド線より下まで落下したか、合体により削除されたら
+            //次の図形を作成
+            current = next;
+            Matter.Body.setPosition(current, {x: lineX, y: 50});            //次の図形を落下位置に移動し、さらに次の図形を作成
+            const n = Math.floor(Math.random() * 4) + 3;
+            next = createShape(700, 300, n, true);
+            cnt = 0;
+        } else if (!current.isStatic) {                                     //図形がガイド線より上にあり、落下中なら
+            //ゲームオーバーチェック
+            color = "#FF0000";                                              //上端ガイド線の色：赤
+            cnt++;                                                          //200カウントしたらゲームオーバー
+            if (cnt > 200) status = "end";
+        }
+        //ガイドの描画
+        drawLine(lineX, 0, lineX, canvas.height, "#0000FF");                //落下位置の線を青色で描く
+        drawLine(195, 150, 605, 150, color);                                //上端のガイド線を黄緑または赤色で描く
+    }
+    //ゲームオーバー
+    if (status == "end") drawText("GAMEOVER!!", 400, 50, 40, "#FF0000");    //赤色
+    if (status != "play") drawText("CLICK TO START", 400, 100, 30, "#000000");  //黒色
+    //スコアの表示
+    context.strokeStyle = "#6699CC";                                        //スコアとNEXTの囲み線の色　灰青色
+    context.lineWidth = 10;
+    context.strokeRect(20, 240, 160, 120);                                  //スコアとNEXTの囲み線を太さ10で描く
+    context.strokeRect(620, 240, 160, 120);
+    drawText("SCORE", 100, 220, 20, "#0000CC");                             //SCOREとNEXTの文字を濃い青、点数を青で表示
+    drawText(score, 100, 300, 50, "#3366CC");
+    drawText("NEXT", 700, 220, 20, "#0000CC");
+}
+
+const drawLine = (x1, y1, x2, y2, color) => {
+    //線の描画
+    context.lineWidth = 1;
+    context.strokeStyle = color;
+    context.beginPath();
+    context.moveTo(x1, y1);
+    context.lineTo(x2, y2);
+    context.stroke();
+}
+
+const drawText = (text, x, y, size, color) => {
+    //テキストの描写
+    context.font = `bold ${size}px sans-serif`;                             //フォントはsans-serif
+    context.fillStyle = color;
+    context.textAlign = "center";                                           //上下左右センターに
+    context.textBaseline = "middle";
+    context.fillText(text, x, y);                                           //指定されたテキストを表示
+}
+</script>
+</head>
+<body onload="init()">
+<p>図形合体ゲーム</p>
+<hr>
+<canvas id="world" width="800" height="600"></canvas>
+</body>
+</html>
